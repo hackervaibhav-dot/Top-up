@@ -20,9 +20,9 @@ app.config['SESSION_FILE_DIR'] = SESSION_DIR
 Session(app)
 CORS(app, supports_credentials=True)
 
-DATA_FILE = 'data.json'
+DATA_FILE = '/tmp/data.json'
 
-UPLOAD_FOLDER = 'uploads'
+UPLOAD_FOLDER = '/tmp/uploads'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
