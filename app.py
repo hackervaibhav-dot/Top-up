@@ -5,6 +5,8 @@ import json
 import os
 import requests
 from datetime import datetime
+import firebase_admin
+from firebase_admin import credentials, db
 
 app = Flask(__name__)
 
@@ -14,57 +16,98 @@ app.config['SESSION_PERMANENT'] = False
 
 SESSION_DIR = '/tmp/flask_session'
 if not os.path.exists(SESSION_DIR):
-    os.makedirs(SESSION_DIR)
+    os.makedirs(SESSION_DIR, exist_ok=True)
 app.config['SESSION_FILE_DIR'] = SESSION_DIR
 
 Session(app)
 CORS(app, supports_credentials=True)
 
-DATA_FILE = '/tmp/data.json'
+# ============ FIREBASE SETUP ============
+FIREBASE_DB_URL = 'https://topup-3d3ba-default-rtdb.asia-southeast1.firebasedatabase.app/'
 
-UPLOAD_FOLDER = '/tmp/uploads'
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+# Initialize Firebase
+try:
+    # For Vercel deployment (environment variable se)
+    if os.environ.get('FIREBASE_SERVICE_ACCOUNT'):
+        cred_dict = json.loads(os.environ.get('FIREBASE_SERVICE_ACCOUNT'))
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': FIREBASE_DB_URL
+        })
+        print("Firebase initialized with service account from env")
+    # For local development (file se)
+    elif os.path.exists('firebase-key.json'):
+        cred = credentials.Certificate('firebase-key.json')
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': FIREBASE_DB_URL
+        })
+        print("Firebase initialized with firebase-key.json file")
+    else:
+        # Fallback - anonymous mode (only for testing)
+        firebase_admin.initialize_app(options={
+            'databaseURL': FIREBASE_DB_URL
+        })
+        print("Firebase initialized in anonymous mode")
+except Exception as e:
+    print(f"Firebase init error: {e}")
 
-def init_data():
-    if not os.path.exists(DATA_FILE):
-        default_data = {
-            "users": [
-                {"id": 1, "email": "admin@gmail.com", "password": "VIP@@01", "name": "Admin", "isAdmin": True, "createdAt": datetime.now().isoformat()}
-            ],
-            "transactions": [],
-            "diamonds": [
-                {"id": 1, "diamonds": 100, "price": 59, "originalPrice": 80, "available": True},
-                {"id": 2, "diamonds": 310, "price": 179, "originalPrice": 240, "available": True},
-                {"id": 3, "diamonds": 520, "price": 299, "originalPrice": 400, "available": True},
-                {"id": 4, "diamonds": 1060, "price": 599, "originalPrice": 800, "available": True},
-                {"id": 5, "diamonds": 2180, "price": 1199, "originalPrice": 1600, "available": True},
-                {"id": 6, "diamonds": 5600, "price": 2999, "originalPrice": 4000, "available": True}
-            ],
-            "memberships": [
-                {"id": "weekly_lite", "name": "WEEKLY LITE", "price": 40, "originalPrice": 50, "instant": 20, "daily": 10, "duration": 7, "available": True},
-                {"id": "weekly", "name": "WEEKLY", "price": 127, "originalPrice": 159, "instant": 200, "daily": 35, "duration": 7, "available": True},
-                {"id": "monthly", "name": "MONTHLY", "price": 639, "originalPrice": 799, "instant": 1000, "daily": 50, "duration": 30, "available": True}
-            ],
-            "settings": {
-                "upiId": "omkardipt@fam",
-                "qrImage": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAANaSURBVHgB7ZsxbttAFEUPFZAunQtYV+kC3kqXyC3SVYr0qXUJF2lTp0ufPgW2yphjSI3Mn6FEDufNA1jCkJS55H/yzZtBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARB+D9jGIbBm80OjA0zGPYH8Hl/F1u+W9uw3+1gPp/BcrEA0zRZEEVRIM/zR1mWcYQ8gSAIYHh/gOPmCF3XcZRlCUmSwGw2A9u2wXVdDsdxoGkayLIMQgjIsgxM04S2baFpGoiiCKIo4iiKAkRRhKqqoCgK2LYNnufBx8cHHI9HuF6vUFUVRFEEcRxzFEUhhBAAgDAMoW1bSJIEXNeFpmlgPp/DbrcDAKAoCsjn8wnbtuEwjuNIgiCQ4/EoPctZz+dT0jRNwjCMpCgKiaJItm0rlFKJjzMMA6mqiqyXSwnDMEKpSCm1cM5j2zZMaZomSdNUXq+qitR1LSmVEkVRtOo8SZJAuq4TQgiM47hUzjmU9fZtCwCw2WzgeDzCYrGQHvI8DyGE5P1+jxAKJpMJrNdr2Gw2EIZhz7MsC4wxGIYBwzCgrmu4Xq9wPB6hbVsYhiFSqS0hBJRSAADDMECpBNM0wbIsiOMYwjCEzWYjhRBCoG1beZ7L5QJt28LxeITj8SiFhBBQFAUwxmSzYRgGqqqCJEkQx7H0SqUJIQjDMHzf9yEMQ4jjGDzPgyiK4P39XQpRSmE+n0PTNBCO40Cj0Sg8Ho/w8/Mjn2maJhgGsFwuYb/fy1mU53kQx7F88zxPvjYajdK1XJzHhQIhhHzf96EsS7LdboUwDIVpmuS6LrFtWzYaDZlpmuS6LkmlkufzKX+2bVuapiGCICCO40hRFFKpFKVUCiGELMsSx3FkGIYwDENmWRbLsiyUUkIYhsKyLGGaJpmmKTNNE8uyhBBC4rqueG/LsohSStI0jWmahuM4TNM0pus6M00T0zSNKYoSxhjDNE2maRoDADFNEwAAiqJgmqYhAACGYUjTNBBCgKIoAgDANE1QFAVCCKiqCgAAFEUBAADLsqSXEAQhBADA8zwAAFAUBUIIAACGYQCEEAAAwzCEEEJ8fHwAwzAghAAAWJYFQggBAIDrugAAwLZt6SUEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRD+kz8B2ZYMMrQ+KY0AAAAASUVORK5CYII="
-            }
+# Firebase references
+users_ref = db.reference('users')
+transactions_ref = db.reference('transactions')
+diamonds_ref = db.reference('diamonds')
+memberships_ref = db.reference('memberships')
+settings_ref = db.reference('settings')
+
+# ============ INITIALIZE DEFAULT DATA ============
+def init_firebase_data():
+    # Check if diamonds exist
+    diamonds = diamonds_ref.get()
+    if not diamonds:
+        default_diamonds = {
+            "1": {"id": 1, "diamonds": 100, "price": 59, "originalPrice": 80, "available": True},
+            "2": {"id": 2, "diamonds": 310, "price": 179, "originalPrice": 240, "available": True},
+            "3": {"id": 3, "diamonds": 520, "price": 299, "originalPrice": 400, "available": True},
+            "4": {"id": 4, "diamonds": 1060, "price": 599, "originalPrice": 800, "available": True},
+            "5": {"id": 5, "diamonds": 2180, "price": 1199, "originalPrice": 1600, "available": True},
+            "6": {"id": 6, "diamonds": 5600, "price": 2999, "originalPrice": 4000, "available": True}
         }
-        with open(DATA_FILE, 'w') as f:
-            json.dump(default_data, f, indent=2)
+        diamonds_ref.set(default_diamonds)
+        print("Default diamonds added")
+    
+    # Check if memberships exist
+    memberships = memberships_ref.get()
+    if not memberships:
+        default_memberships = {
+            "weekly_lite": {"id": "weekly_lite", "name": "WEEKLY LITE", "price": 40, "originalPrice": 50, "instant": 20, "daily": 10, "duration": 7, "available": True},
+            "weekly": {"id": "weekly", "name": "WEEKLY", "price": 127, "originalPrice": 159, "instant": 200, "daily": 35, "duration": 7, "available": True},
+            "monthly": {"id": "monthly", "name": "MONTHLY", "price": 639, "originalPrice": 799, "instant": 1000, "daily": 50, "duration": 30, "available": True}
+        }
+        memberships_ref.set(default_memberships)
+        print("Default memberships added")
+    
+    # Check if settings exist
+    settings = settings_ref.get()
+    if not settings:
+        default_settings = {
+            "upiId": "omkardipt@fam",
+            "qrImage": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAANaSURBVHgB7ZsxbttAFEUPFZAunQtYV+kC3kqXyC3SVYr0qXUJF2lTp0ufPgW2yphjSI3Mn6FEDufNA1jCkJS55H/yzZtBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARBEARB+D9jGIbBm80OjA0zGPYH8Hl/F1u+W9uw3+1gPp/BcrEA0zRZEEVRIM/zR1mWcYQ8gSAIYHh/gOPmCF3XcZRlCUmSwGw2A9u2wXVdDsdxoGkayLIMQgjIsgxM04S2baFpGoiiCKIo4iiKAkRRhKqqoCgK2LYNnufBx8cHHI9HuF6vUFUVRFEEcRxzFEUhhBAAgDAMoW1bSJIEXNeFpmlgPp/DbrcDAKAoCsjn8wnbtuEwjuNIgiCQ4/EoPctZz+dT0jRNwjCMpCgKiaJItm0rlFKJjzMMA6mqiqyXSwnDMEKpSCm1cM5j2zZMaZomSdNUXq+qitR1LSmVEkVRtOo8SZJAuq4TQgiM47hUzjmU9fZtCwCw2WzgeDzCYrGQHvI8DyGE5P1+jxAKJpMJrNdr2Gw2EIZhz7MsC4wxGIYBwzCgrmu4Xq9wPB6hbVsYhiFSqS0hBJRSAADDMECpBNM0wbIsiOMYwjCEzWYjhRBCoG1beZ7L5QJt28LxeITj8SiFhBBQFAUwxmSzYRgGqqqCJEkQx7H0SqUJIQjDMHzf9yEMQ4jjGDzPgyiK4P39XQpRSmE+n0PTNBCO40Cj0Sg8Ho/w8/Mjn2maJhgGsFwuYb/fy1mU53kQx7F88zxPvjYajdK1XJzHhQIhhHzf96EsS7LdboUwDIVpmuS6LrFtWzYaDZlpmuS6LkmlkufzKX+2bVuapiGCICCO40hRFFKpFKVUCiGELMsSx3FkGIYwDENmWRbLsiyUUkIYhsKyLGGaJpmmKTNNE8uyhBBC4rqueG/LsohSStI0jWmahuM4TNM0pus6M00T0zSNKYoSxhjDNE2maRoDADFNEwAAiqJgmqYhAACGYUjTNBBCgKIoAgDANE1QFAVCCKiqCgAAFEUBAADLsqSXEAQhBADA8zwAAFAUBUIIAACGYQCEEAAAwzCEEEJ8fHwAwzAghAAAWJYFQggBAIDrugAAwLZt6SUEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRAEQRD+kz8B2ZYMMrQ+KY0AAAAASUVORK5CYII="
+        }
+        settings_ref.set(default_settings)
+        print("Default settings added")
+    
+    # Check if admin user exists
+    users = users_ref.get()
+    if not users:
+        default_users = {
+            "1": {"id": 1, "email": "admin@gmail.com", "password": "VIP@@01", "name": "Admin", "isAdmin": True, "createdAt": datetime.now().isoformat()}
+        }
+        users_ref.set(default_users)
+        print("Default admin user added")
 
-def read_data():
-    with open(DATA_FILE, 'r') as f:
-        return json.load(f)
+# Call init function
+init_firebase_data()
 
-def write_data(data):
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
-
-init_data()
-
-# ==================== API ROUTES ====================
+# ============ API ROUTES ============
 
 @app.route('/')
 def index():
@@ -72,26 +115,34 @@ def index():
 
 @app.route('/api/data')
 def get_data():
-    data = read_data()
+    diamonds = diamonds_ref.get() or {}
+    memberships = memberships_ref.get() or {}
+    settings = settings_ref.get() or {}
+    
+    # Convert dict to list
+    diamonds_list = list(diamonds.values())
+    memberships_list = list(memberships.values())
+    
     return jsonify({
         'success': True,
-        'diamonds': data['diamonds'],
-        'memberships': data['memberships'],
-        'settings': data['settings'],
+        'diamonds': diamonds_list,
+        'memberships': memberships_list,
+        'settings': settings,
         'user': session.get('user')
     })
 
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
-    db = read_data()
-    for u in db['users']:
-        if u['email'] == data['email'] and u['password'] == data['password']:
+    users = users_ref.get() or {}
+    
+    for uid, u in users.items():
+        if u.get('email') == data['email'] and u.get('password') == data['password']:
             session['user'] = {
-                'id': u['id'],
+                'id': uid,
                 'email': u['email'],
                 'name': u['name'],
-                'isAdmin': u['isAdmin']
+                'isAdmin': u.get('isAdmin', False)
             }
             return jsonify({'success': True, 'user': session['user']})
     return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
@@ -99,22 +150,27 @@ def login():
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.json
-    db = read_data()
-    for u in db['users']:
+    users = users_ref.get() or {}
+    
+    # Check if email exists
+    for u in users.values():
         if u['email'] == data['email']:
             return jsonify({'success': False, 'message': 'Email already exists'}), 400
+    
+    # Create new user
+    new_id = str(len(users) + 1)
     new_user = {
-        'id': len(db['users']) + 1,
+        'id': int(new_id),
         'email': data['email'],
         'password': data['password'],
         'name': data.get('name', data['email'].split('@')[0]),
         'isAdmin': False,
         'createdAt': datetime.now().isoformat()
     }
-    db['users'].append(new_user)
-    write_data(db)
+    users_ref.child(new_id).set(new_user)
+    
     session['user'] = {
-        'id': new_user['id'],
+        'id': new_id,
         'email': new_user['email'],
         'name': new_user['name'],
         'isAdmin': False
@@ -132,62 +188,54 @@ def me():
 
 @app.route('/api/transactions-by-uid/<uid>')
 def get_transactions_by_uid(uid):
-    db = read_data()
-    user_transactions = [t for t in db['transactions'] if t['playerId'] == uid]
+    all_transactions = transactions_ref.get() or {}
+    user_transactions = [t for t in all_transactions.values() if t.get('playerId') == uid]
+    # Sort by createdAt descending
+    user_transactions.sort(key=lambda x: x.get('createdAt', ''), reverse=True)
     return jsonify({'success': True, 'data': user_transactions})
 
 @app.route('/api/diamonds/<int:diamond_id>', methods=['PUT'])
 def update_diamond(diamond_id):
     if not session.get('user', {}).get('isAdmin'):
         return jsonify({'success': False}), 403
-    db = read_data()
-    for d in db['diamonds']:
-        if d['id'] == diamond_id:
-            d.update(request.json)
-            write_data(db)
-            return jsonify({'success': True})
-    return jsonify({'success': False}), 404
+    
+    diamonds_ref.child(str(diamond_id)).update(request.json)
+    return jsonify({'success': True})
 
 @app.route('/api/memberships/<membership_id>', methods=['PUT'])
 def update_membership(membership_id):
     if not session.get('user', {}).get('isAdmin'):
         return jsonify({'success': False}), 403
-    db = read_data()
-    for m in db['memberships']:
-        if m['id'] == membership_id:
-            m.update(request.json)
-            write_data(db)
-            return jsonify({'success': True})
-    return jsonify({'success': False}), 404
+    
+    memberships_ref.child(membership_id).update(request.json)
+    return jsonify({'success': True})
 
 @app.route('/api/settings', methods=['PUT'])
 def update_settings():
     if not session.get('user', {}).get('isAdmin'):
         return jsonify({'success': False}), 403
-    db = read_data()
-    db['settings'].update(request.json)
-    write_data(db)
+    
+    settings_ref.update(request.json)
     return jsonify({'success': True})
 
 @app.route('/api/upload-qr', methods=['POST'])
 def upload_qr():
     if not session.get('user', {}).get('isAdmin'):
         return jsonify({'success': False}), 403
+    
     if 'qr' not in request.files:
         return jsonify({'success': False, 'message': 'No file'}), 400
+    
     file = request.files['qr']
     if file.filename == '':
         return jsonify({'success': False, 'message': 'No file'}), 400
     
-    # Convert to base64 for storage
     import base64
     file_data = file.read()
     base64_qr = base64.b64encode(file_data).decode('utf-8')
     data_url = f"data:image/png;base64,{base64_qr}"
     
-    db = read_data()
-    db['settings']['qrImage'] = data_url
-    write_data(db)
+    settings_ref.update({'qrImage': data_url})
     return jsonify({'success': True, 'qrImage': data_url})
 
 @app.route('/api/submit-payment', methods=['POST'])
@@ -195,9 +243,10 @@ def submit_payment():
     data = request.json
     if not data.get('utrNumber') or len(data['utrNumber']) != 12 or not data['utrNumber'].isdigit():
         return jsonify({'success': False, 'message': 'UTR must be 12 digits'}), 400
-    db = read_data()
+    
+    transaction_id = str(int(datetime.now().timestamp() * 1000))
     transaction = {
-        'id': int(datetime.now().timestamp() * 1000),
+        'id': int(transaction_id),
         'playerId': data['playerId'],
         'playerName': data.get('playerName', 'Unknown'),
         'itemType': data['itemType'],
@@ -207,42 +256,45 @@ def submit_payment():
         'status': 'pending',
         'createdAt': datetime.now().isoformat()
     }
-    db['transactions'].insert(0, transaction)
-    write_data(db)
+    transactions_ref.child(transaction_id).set(transaction)
     return jsonify({'success': True})
 
 @app.route('/api/transactions')
 def get_transactions():
     if not session.get('user', {}).get('isAdmin'):
         return jsonify({'success': False}), 403
-    db = read_data()
-    return jsonify({'success': True, 'data': db['transactions']})
+    
+    all_transactions = transactions_ref.get() or {}
+    transactions_list = list(all_transactions.values())
+    # Sort by createdAt descending
+    transactions_list.sort(key=lambda x: x.get('createdAt', ''), reverse=True)
+    return jsonify({'success': True, 'data': transactions_list})
 
 @app.route('/api/transactions/<int:tx_id>/status', methods=['PUT'])
 def update_transaction_status(tx_id):
     if not session.get('user', {}).get('isAdmin'):
         return jsonify({'success': False}), 403
-    db = read_data()
-    for tx in db['transactions']:
-        if tx['id'] == tx_id:
-            tx['status'] = request.json['status']
-            write_data(db)
-            return jsonify({'success': True})
-    return jsonify({'success': False}), 404
+    
+    transactions_ref.child(str(tx_id)).update({'status': request.json['status']})
+    return jsonify({'success': True})
 
 @app.route('/api/stats')
 def get_stats():
     if not session.get('user', {}).get('isAdmin'):
         return jsonify({'success': False}), 403
-    db = read_data()
-    revenue = sum(t['amount'] for t in db['transactions'] if t['status'] == 'completed')
-    pending = len([t for t in db['transactions'] if t['status'] == 'pending'])
+    
+    all_transactions = transactions_ref.get() or {}
+    users = users_ref.get() or {}
+    
+    revenue = sum(t['amount'] for t in all_transactions.values() if t.get('status') == 'completed')
+    pending = len([t for t in all_transactions.values() if t.get('status') == 'pending'])
+    
     return jsonify({
         'success': True,
         'data': {
             'totalRevenue': revenue,
             'pendingOrders': pending,
-            'totalUsers': len(db['users'])
+            'totalUsers': len(users)
         }
     })
 
@@ -267,7 +319,7 @@ def player_info(uid):
     except:
         return jsonify({'success': False}), 500
 
-# ==================== HTML TEMPLATE ====================
+# ============ HTML TEMPLATE ============
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -862,7 +914,7 @@ HTML_TEMPLATE = '''
             <button class="btn btn-outline" style="width:100%; margin-top:10px" @click="register">Register</button>
             <button class="btn btn-outline" style="width:100%; margin-top:10px" @click="showLoginModal = false">Close</button>
             <div style="font-size:0.7rem; text-align:center; margin-top:12px; color:#ffaa66">
-                <i class="fas fa-info-circle"></i> Admin: ADMIN LOGIN USER REGISTER FIRST
+                <i class="fas fa-info-circle"></i> Admin: admin@gmail.com / VIP@@01
             </div>
         </div>
     </div>
@@ -989,7 +1041,7 @@ HTML_TEMPLATE = '''
                 } catch(e) {}
             },
             fetchPlayerInfo: async function() {
-                if (!this.uidInput || !/^\\d+$/.test(this.uidInput)) {
+                if (!this.uidInput || !/^\d+$/.test(this.uidInput)) {
                     this.showToast('Enter valid Player ID (numbers only)', 'warning');
                     return;
                 }
@@ -1183,6 +1235,5 @@ HTML_TEMPLATE = '''
 '''
 
 if __name__ == '__main__':
-    import os
     port = int(os.environ.get('PORT', 3000))
     app.run(debug=False, host='0.0.0.0', port=port)
